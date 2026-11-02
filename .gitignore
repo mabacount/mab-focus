@@ -1,0 +1,21 @@
+# پوشه‌های وابستگی جاوااسکریپت و بیلد فرانت‌اند
+node_modules/
+dist/
+dist-ssr/
+*.local
+
+# خروجی‌های کامپایل زبان Rust
+src-tauri/target/
+
+# فایل‌های دیتابیس محلی، لاگ‌ها و سیستم
+*.db
+*.db-journal
+*.log
+MabFocus_WorkLog.txt
+*.xlsx
+
+# تنظیمات ادیتور و سیستم‌عامل
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

@@ -1,0 +1,30 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  html, body {
+    margin: 0;
+    padding: 0;
+    width: 100%;
+    height: 100%;
+    overflow: hidden;
+    user-select: none;
+    -webkit-user-select: none;
+    font-family: 'Plus Jakarta Sans', 'Vazirmatn', -apple-system, BlinkMacSystemFont, sans-serif;
+  }
+}
+
+/* جلوگیری از لرزش افقی ارقام ثانیه‌شمار */
+.tabular-nums {
+  font-variant-numeric: tabular-nums;
+}
+
+/* کلاس کمکی برای جابه‌جایی پنجره در محیط ویندوز */
+.tauri-drag {
+  -webkit-app-region: drag;
+}
+
+.no-drag {
+  -webkit-app-region: no-drag;
+}
