@@ -14,7 +14,7 @@ use gcal_sync::{
 };
 use rusqlite::params;
 use std::collections::HashMap;
-use tauri::{AppHandle, Emitter, Manager};
+use tauri::{AppHandle, Emitter, Manager, WindowEvent};
 use timer::{
     broadcast_state_now, get_timer_state, pause_timer, resume_timer, spawn_timer_engine,
     start_break, start_instant_work, stop_and_reset_timer, switch_task_mid_pomodoro,
@@ -29,6 +29,17 @@ fn open_dashboard_window(app: AppHandle) -> Result<(), String> {
         let _ = win.unminimize();
         let _ = win.show();
         let _ = win.set_focus();
+    } else {
+        let _ = tauri::WebviewWindowBuilder::new(
+            &app,
+            "main",
+            tauri::WebviewUrl::App("/".into()),
+        )
+        .title("Mab-Focus — Dashboard")
+        .inner_size(1150.0, 760.0)
+        .resizable(true)
+        .decorations(true)
+        .build();
     }
     Ok(())
 }
@@ -197,7 +208,6 @@ fn save_app_setting(
 ) -> Result<(), String> {
     set_sync_setting(&key, &value)?;
 
-    // اگر تایمر در حالت آماده به کار (idle) است، زمان هدف جدید بلافاصله اعمال شود
     if key == "focus_minutes" {
         if let Ok(mins) = value.trim().parse::<i64>() {
             if mins > 0 {
@@ -226,11 +236,19 @@ fn get_all_settings() -> Result<HashMap<String, String>, String> {
 
 fn main() {
     let _ = init_db();
-
     let timer_state = AppTimerState::new();
 
     tauri::Builder::default()
         .manage(timer_state.clone())
+        .on_window_event(|window, event| {
+            if let WindowEvent::CloseRequested { api, .. } = event {
+                // با زدن ضربدر پنجره اصلی تخریب نشود، بلکه مخفی گردد تا ارتباط قطع نشود
+                if window.label() == "main" {
+                    let _ = window.hide();
+                    api.prevent_close();
+                }
+            }
+        })
         .setup(move |app| {
             spawn_timer_engine(app.handle().clone(), timer_state);
             Ok(())

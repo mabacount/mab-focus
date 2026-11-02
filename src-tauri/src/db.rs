@@ -151,30 +151,33 @@ pub fn update_task_log_logic(
     new_duration_seconds: i64,
     edit_note: Option<String>,
 ) -> Result<()> {
-    let mut stmt = conn.prepare("SELECT * FROM task_logs WHERE id = ?1")?;
-    let old_record = stmt.query_row(params![id], |row| {
-        Ok(TaskLogRecord {
-            id: row.get(0)?,
-            title: row.get(1)?,
-            is_untitled_draft: row.get::<_, i32>(2)? == 1,
-            macro_project_id: row.get(3)?,
-            sub_project_id: row.get(4)?,
-            tag_ids_json: row.get(5)?,
-            start_time: row.get(6)?,
-            end_time: row.get(7)?,
-            duration_seconds: row.get(8)?,
-            overtime_seconds: row.get(9)?,
-            pomodoro_set_index: row.get(10)?,
-            is_edited: row.get::<_, i32>(11)? == 1,
-            original_start_time: row.get(12)?,
-            original_end_time: row.get(13)?,
-            original_duration_seconds: row.get(14)?,
-            edited_at: row.get(15)?,
-            edit_note: row.get(16)?,
-            sync_status: row.get(17)?,
-            calendar_event_id: row.get(18)?,
-        })
-    })?;
+    // خواندن رکورد قدیمی در یک بلاک مستقل تا stmt بلافاصله drop شود و جدول قفل نماند
+    let old_record = {
+        let mut stmt = conn.prepare("SELECT * FROM task_logs WHERE id = ?1")?;
+        stmt.query_row(params![id], |row| {
+            Ok(TaskLogRecord {
+                id: row.get(0)?,
+                title: row.get(1)?,
+                is_untitled_draft: row.get::<_, i32>(2)? == 1,
+                macro_project_id: row.get(3)?,
+                sub_project_id: row.get(4)?,
+                tag_ids_json: row.get(5)?,
+                start_time: row.get(6)?,
+                end_time: row.get(7)?,
+                duration_seconds: row.get(8)?,
+                overtime_seconds: row.get(9)?,
+                pomodoro_set_index: row.get(10)?,
+                is_edited: row.get::<_, i32>(11)? == 1,
+                original_start_time: row.get(12)?,
+                original_end_time: row.get(13)?,
+                original_duration_seconds: row.get(14)?,
+                edited_at: row.get(15)?,
+                edit_note: row.get(16)?,
+                sync_status: row.get(17)?,
+                calendar_event_id: row.get(18)?,
+            })
+        })?
+    };
 
     let time_has_changed = old_record.start_time != new_start_time
         || old_record.end_time != new_end_time
