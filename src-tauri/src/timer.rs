@@ -72,7 +72,7 @@ pub fn spawn_timer_engine(app: AppHandle, state: AppTimerState) {
         loop {
             thread::sleep(Duration::from_millis(1000));
 
-            let (should_emit, sync_payload, start_overtime, nudge_overtime) = {
+            let (should_emit, sync_payload, start_overtime, nudge_overtime, active_snapshot) = {
                 let mut pomodoro = state.pomodoro.lock().unwrap_or_else(|e| e.into_inner());
                 let mut active_task = state.active_task.lock().unwrap_or_else(|e| e.into_inner());
 
@@ -104,15 +104,27 @@ pub fn spawn_timer_engine(app: AppHandle, state: AppTimerState) {
                     }
                 }
 
+                let snap = active_task.clone();
                 let payload = FullTimerPayload {
                     pomodoro: pomodoro.clone(),
                     task: active_task.clone(),
                 };
 
-                (emit_tick, payload, is_start_ot, is_nudge_ot)
+                (emit_tick, payload, is_start_ot, is_nudge_ot, snap)
             };
 
             if should_emit {
+                // به‌روزرسانی زنده مدت زمان تسک فعال در دیتابیس هر ۵ ثانیه
+                if let Some(t) = active_snapshot {
+                    if t.elapsed_task_seconds % 5 == 0 {
+                        if let Ok(conn) = get_connection() {
+                            let _ = conn.execute(
+                                "UPDATE task_logs SET duration_seconds = ?1, overtime_seconds = ?2 WHERE id = ?3",
+                                params![t.elapsed_task_seconds, t.overtime_seconds, t.log_id],
+                            );
+                        }
+                    }
+                }
                 let _ = app.emit("timer-tick", &sync_payload);
             }
             if start_overtime {
