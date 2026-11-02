@@ -1,31 +1,23 @@
-import React, { useState, useEffect, useRef } from "react";
-import { getCurrentWindow } from "@tauri-apps/api/window";
+import React, { useState, useEffect } from "react";
 import { getAllWebviewWindows } from "@tauri-apps/api/webviewWindow";
 import {
   PomodoroState,
   ActiveTaskSlice,
   TimerTickPayload,
-  ProjectNode,
 } from "../types/models";
 import {
   startInstantWork,
   startBreak,
   pauseTimer,
   resumeTimer,
-  getAllProjects,
   onTimerTick,
-  onOvertimeStarted,
-  onOvertimeNudge,
 } from "../services/ipc";
-import { soundFx } from "../services/audio";
-import { QuickTaskPopover } from "./QuickTaskPopover";
 import {
   Play,
   Pause,
   Coffee,
-  Edit3,
   LayoutDashboard,
-  Maximize2,
+  MoreHorizontal,
 } from "lucide-react";
 
 export const FloatingWidget: React.FC = () => {
@@ -38,66 +30,24 @@ export const FloatingWidget: React.FC = () => {
   });
 
   const [activeTask, setActiveTask] = useState<ActiveTaskSlice | null>(null);
-  const [projects, setProjects] = useState<ProjectNode[]>([]);
-  const [isPopoverOpen, setIsPopoverOpen] = useState(false);
-  const [dockPosture, setDockPosture] = useState<"normal" | "docked-left" | "docked-right">("normal");
-  const [isHoveredWhileDocked, setIsHoveredWhileDocked] = useState(false);
+  const [isHovered, setIsHovered] = useState(false);
 
-  const appWindow = useRef(getCurrentWindow()).current;
-
-  // دریافت لیست پروژه‌ها جهت پیشنهاد در منوی بازشونده
   useEffect(() => {
-    getAllProjects().then(setProjects).catch(() => {});
-  }, []);
-
-  // گوش دادن به تیک‌های یک ثانیه‌ای ارسالی از هسته Rust
-  useEffect(() => {
-    let unlistenTick: (() => void) | undefined;
-    let unlistenOvertime: (() => void) | undefined;
-    let unlistenNudge: (() => void) | undefined;
-
+    let unlisten: (() => void) | undefined;
     onTimerTick((payload: TimerTickPayload) => {
       setPomodoro(payload.pomodoro);
       setActiveTask(payload.task);
-    }).then((fn) => (unlistenTick = fn));
-
-    onOvertimeStarted(() => {
-      soundFx.playOvertimeBell();
-    }).then((fn) => (unlistenOvertime = fn));
-
-    onOvertimeNudge(() => {
-      soundFx.playNudgePing();
-    }).then((fn) => (unlistenNudge = fn));
+    }).then((fn) => (unlisten = fn));
 
     return () => {
-      if (unlistenTick) unlistenTick();
-      if (unlistenOvertime) unlistenOvertime();
-      if (unlistenNudge) unlistenNudge();
+      if (unlisten) unlisten();
     };
   }, []);
 
-  // تشخیص موقعیت لبه مانیتور برای چسبیدن خودکار (Docking)
-  useEffect(() => {
-    let unlistenMoved: (() => void) | undefined;
-
-    appWindow.onMoved(({ payload: position }) => {
-      // اگر ویجت به کمتر از ۱۵ پیکسل از لبه چپ مانیتور نزدیک شود
-      if (position.x <= 15) {
-        setDockPosture("docked-left");
-      } else {
-        setDockPosture("normal");
-      }
-    }).then((fn) => (unlistenMoved = fn));
-
-    return () => {
-      if (unlistenMoved) unlistenMoved();
-    };
-  }, [appWindow]);
-
-  // عملیات شروع فوری
-  const handleStartPlay = async () => {
-    soundFx.playClickStart();
-    if (pomodoro.status === "paused") {
+  const handleTogglePlay = async () => {
+    if (pomodoro.status === "running" || pomodoro.status === "overtime") {
+      await pauseTimer();
+    } else if (pomodoro.status === "paused") {
       await resumeTimer();
     } else {
       const logId = await startInstantWork();
@@ -107,24 +57,13 @@ export const FloatingWidget: React.FC = () => {
         elapsed_task_seconds: 0,
         overtime_seconds: 0,
       });
-      // باز شدن منوی مشخصات تسک هم‌زمان با شروع
-      setIsPopoverOpen(true);
     }
   };
 
-  // عملیات توقف موقت
-  const handlePause = async () => {
-    soundFx.playClickStart();
-    await pauseTimer();
-  };
-
-  // شروع استراحت
   const handleBreak = async () => {
-    soundFx.playClickStart();
     await startBreak();
   };
 
-  // باز کردن یا فوکوس روی پنجره داشبورد اصلی
   const handleOpenDashboard = async () => {
     try {
       const windows = await getAllWebviewWindows();
@@ -138,8 +77,8 @@ export const FloatingWidget: React.FC = () => {
     }
   };
 
-  // محاسبات نمایش زمان و درصد نوار دایره‌ای
-  const isOvertime = pomodoro.status === "overtime";
+  // محاسبات نمایش زمان
+  const isOvertime = pomodoro.status == "overtime";
   const isBreak = pomodoro.mode === "short_break" || pomodoro.mode === "long_break";
 
   let displayMinutes = 0;
@@ -159,8 +98,8 @@ export const FloatingWidget: React.FC = () => {
 
   const formattedTime = `${isNegative ? "-" : ""}${String(displayMinutes).padStart(2, "0")}:${String(displaySeconds).padStart(2, "0")}`;
 
-  // محیط دایره با شعاع ۵۰
-  const radius = 50;
+  // تنظیمات حلقه پیشرفت دایره‌ای
+  const radius = 22;
   const circumference = 2 * Math.PI * radius;
   let progressRatio = 0;
 
@@ -172,167 +111,99 @@ export const FloatingWidget: React.FC = () => {
 
   const strokeDashoffset = circumference - progressRatio * circumference;
 
-  // تعیین رنگ نوار بر اساس وضعیت
-  let ringStrokeColor = "#3B82F6"; // تمرکز عادی (آبی)
-  if (isOvertime) {
-    ringStrokeColor = "#F59E0B"; // اضافه‌کاری منفی (کهربایی)
-  } else if (isBreak) {
-    ringStrokeColor = "#10B981"; // استراحت (سبز)
-  }
-
-  // وضعیت نوار باریک چسبیده به لبه مانیتور
-  if (dockPosture === "docked-left" && !isHoveredWhileDocked) {
-    return (
-      <div
-        onMouseEnter={() => setIsHoveredWhileDocked(true)}
-        className="fixed top-12 left-0 w-3.5 h-36 bg-[#141416]/90 border-r border-y border-white/10 rounded-r-xl flex flex-col justify-end p-0.5 cursor-pointer shadow-lg transition-all z-50 overflow-hidden"
-      >
-        <div
-          className="w-full rounded-full transition-all duration-500"
-          style={{
-            height: `${Math.round(progressRatio * 100)}%`,
-            backgroundColor: ringStrokeColor,
-          }}
-        />
-      </div>
-    );
-  }
+  let strokeColor = "#10B981"; // سبز زمردی آرام مطابق تصویر هدف
+  if (isOvertime) strokeColor = "#F59E0B";
+  else if (pomodoro.mode === "focus" && pomodoro.status === "running") strokeColor = "#3B82F6";
 
   return (
     <div
-      onMouseLeave={() => {
-        if (dockPosture === "docked-left") {
-          setIsHoveredWhileDocked(false);
-        }
-      }}
-      className="p-3 w-fit select-none flex flex-col items-center relative"
+      dir="ltr"
+      onMouseEnter={() => setIsHovered(true)}
+      onMouseLeave={() => setIsHovered(false)}
+      className="p-1 select-none flex items-center justify-start overflow-hidden w-fit h-fit"
     >
-      {/* دایره اصلی ویجت همراه با ناحیه جابه‌جایی در ویندوز */}
+      {/* کپسول اصلی با قابلیت جابه‌جایی در ویندوز */}
       <div
         data-tauri-drag-region
-        className="w-44 h-44 rounded-full bg-[#141416]/95 border border-white/10 shadow-2xl relative flex flex-col items-center justify-center tauri-drag"
+        className={`h-14 rounded-full bg-[#18181B]/95 border border-white/10 shadow-2xl flex items-center px-1.5 transition-all duration-300 ease-out cursor-move tauri-drag ${
+          isHovered ? "w-[240px] pr-3" : "w-14"
+        }`}
       >
-        {/* حلقه پیشرفت SVG */}
-        <svg
-          className="absolute inset-0 w-full h-full -rotate-90 pointer-events-none"
-          viewBox="0 0 120 120"
-        >
-          {/* خط خاکستری پس‌زمینه */}
-          <circle
-            cx="60"
-            cy="60"
-            r={radius}
-            fill="none"
-            stroke="rgba(255, 255, 255, 0.05)"
-            strokeWidth="5"
-          />
-          {/* حلقه پیشرفت زمان فعال */}
-          <circle
-            cx="60"
-            cy="60"
-            r={radius}
-            fill="none"
-            stroke={ringStrokeColor}
-            strokeWidth="5"
-            strokeDasharray={circumference}
-            strokeDashoffset={strokeDashoffset}
-            strokeLinecap="round"
-            className="transition-all duration-300"
-          />
-        </svg>
+        {/* دایره تایمر مینیمال و ارقام هم‌عرض */}
+        <div className="relative w-11 h-11 shrink-0 flex items-center justify-center pointer-events-none">
+          <svg className="absolute inset-0 w-full h-full -rotate-90" viewBox="0 0 52 52">
+            <circle
+              cx="26"
+              cy="26"
+              r={radius}
+              fill="none"
+              stroke="rgba(255, 255, 255, 0.08)"
+              strokeWidth="3"
+            />
+            <circle
+              cx="26"
+              cy="26"
+              r={radius}
+              fill="none"
+              stroke={strokeColor}
+              strokeWidth="3.2"
+              strokeDasharray={circumference}
+              strokeDashoffset={strokeDashoffset}
+              strokeLinecap="round"
+              className="transition-all duration-500"
+            />
+          </svg>
+          <span
+            className="font-mono text-[11px] font-bold tracking-tighter tabular-nums select-none"
+            style={{ color: strokeColor }}
+          >
+            {formattedTime}
+          </span>
+        </div>
 
-        {/* برچسب حالت اجرایی */}
-        <span className="text-[10px] font-medium tracking-wide uppercase text-white/50 mb-0.5 z-10">
-          {isOvertime
-            ? "اضافه‌کاری"
-            : isBreak
-            ? "استراحت"
-            : `ست ${pomodoro.completed_sets_in_cycle + 1} از ۴`}
-        </span>
-
-        {/* زمان‌سنج با ارقام JetBrains Mono بدون لرزش */}
-        <span
-          className={`font-mono text-3xl font-bold tabular-nums tracking-tight z-10 ${
-            isOvertime
-              ? "text-amber-400"
-              : isBreak
-              ? "text-emerald-400"
-              : "text-white"
+        {/* منوی کنترل بازشونده با انیمیشن در هنگام هاور */}
+        <div
+          className={`flex items-center gap-2 ml-3 no-drag transition-all duration-300 ${
+            isHovered ? "opacity-100 translate-x-0" : "opacity-0 -translate-x-3 pointer-events-none"
           }`}
         >
-          {formattedTime}
-        </span>
-
-        {/* دکمه‌های کنترلی درون دایره */}
-        <div className="flex items-center gap-2 mt-2 z-20 no-drag">
-          {pomodoro.status === "running" || pomodoro.status === "overtime" ? (
-            <button
-              onClick={handlePause}
-              title="توقف موقت"
-              className="p-1.5 rounded-full bg-white/10 hover:bg-white/20 text-white transition-colors"
-            >
-              <Pause size={13} />
-            </button>
-          ) : (
-            <button
-              onClick={handleStartPlay}
-              title="شروع کار"
-              className="p-1.5 rounded-full bg-blue-600 hover:bg-blue-500 text-white transition-colors"
-            >
-              <Play size={13} />
-            </button>
-          )}
-
           <button
-            onClick={handleBreak}
-            title="شروع استراحت"
-            className="p-1.5 rounded-full bg-white/5 hover:bg-white/15 text-white/70 hover:text-white transition-colors"
+            onClick={handleTogglePlay}
+            title={pomodoro.status === "running" ? "توقف" : "شروع"}
+            className="w-7 h-7 rounded-full bg-white/10 hover:bg-white/20 text-white flex items-center justify-center transition-colors"
           >
-            <Coffee size={13} />
+            {pomodoro.status === "running" || pomodoro.status === "overtime" ? (
+              <Pause size={12} />
+            ) : (
+              <Play size={12} className="ml-0.5" />
+            )}
           </button>
 
           <button
-            onClick={() => setIsPopoverOpen(!isPopoverOpen)}
-            title="ویرایش مشخصات تسک جاری"
-            className={`p-1.5 rounded-full transition-colors ${
-              isPopoverOpen
-                ? "bg-blue-600 text-white"
-                : "bg-white/5 hover:bg-white/15 text-white/70 hover:text-white"
-            }`}
+            onClick={handleBreak}
+            title="استراحت"
+            className="w-7 h-7 rounded-full bg-white/5 hover:bg-white/15 text-white/70 hover:text-white flex items-center justify-center transition-colors"
           >
-            <Edit3 size={13} />
+            <Coffee size={12} />
           </button>
 
           <button
             onClick={handleOpenDashboard}
-            title="باز کردن داشبورد مدیریت"
-            className="p-1.5 rounded-full bg-white/5 hover:bg-white/15 text-white/70 hover:text-white transition-colors"
+            title="داشبورد مدیریت"
+            className="w-7 h-7 rounded-full bg-white/5 hover:bg-white/15 text-white/70 hover:text-white flex items-center justify-center transition-colors"
           >
-            <LayoutDashboard size={13} />
+            <LayoutDashboard size={12} />
+          </button>
+
+          <button
+            onClick={handleOpenDashboard}
+            title="بیشتر"
+            className="w-7 h-7 rounded-full bg-white/5 hover:bg-white/15 text-white/50 hover:text-white flex items-center justify-center transition-colors"
+          >
+            <MoreHorizontal size={13} />
           </button>
         </div>
       </div>
-
-      {/* منوی بازشونده سریع مشخصات تسک در پایین دایره */}
-      {isPopoverOpen && (
-        <div className="mt-2 no-drag">
-          <QuickTaskPopover
-            activeLogId={activeTask?.log_id || null}
-            projects={projects}
-            onClose={() => setIsPopoverOpen(false)}
-            onTaskSwitched={(newLogId) => {
-              if (activeTask) {
-                setActiveTask({
-                  ...activeTask,
-                  log_id: newLogId,
-                  elapsed_task_seconds: 0,
-                  overtime_seconds: 0,
-                });
-              }
-            }}
-          />
-        </div>
-      )}
     </div>
   );
 };

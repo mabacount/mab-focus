@@ -5,7 +5,7 @@
   "identifier": "com.mabfocus.app",
   "build": {
     "beforeDevCommand": "npm run dev",
-    "devUrl": "http://localhost:5173",
+    "devUrl": "http://127.0.0.1:5173",
     "beforeBuildCommand": "npm run build",
     "frontendDist": "../dist"
   },
@@ -14,7 +14,7 @@
       {
         "title": "Mab-Focus — Dashboard",
         "label": "main",
-        "url": "index.html",
+        "url": "/",
         "width": 1150,
         "height": 760,
         "resizable": true,
@@ -25,12 +25,13 @@
       {
         "title": "Mab-Focus Widget",
         "label": "widget",
-        "url": "widget.html",
-        "width": 320,
-        "height": 420,
+        "url": "/widget.html",
+        "width": 260,
+        "height": 68,
         "resizable": false,
         "decorations": false,
         "transparent": true,
+        "shadow": false,
         "alwaysOnTop": true,
         "skipTaskbar": true,
         "visible": true

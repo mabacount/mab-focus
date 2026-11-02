@@ -23,18 +23,20 @@ export const DashboardApp: React.FC = () => {
   const [tasks, setTasks] = useState<TaskLogRecord[]>([]);
   const [projects, setProjects] = useState<ProjectNode[]>([]);
   const [isLoading, setIsLoading] = useState(false);
+  const [hasError, setHasError] = useState(false);
 
   const loadData = async () => {
     setIsLoading(true);
+    setHasError(false);
     try {
       const [fetchedTasks, fetchedProjects] = await Promise.all([
-        getAllTaskLogs(),
-        getAllProjects(),
+        getAllTaskLogs().catch(() => []),
+        getAllProjects().catch(() => []),
       ]);
-      setTasks(fetchedTasks);
-      setProjects(fetchedProjects);
+      setTasks(fetchedTasks || []);
+      setProjects(fetchedProjects || []);
     } catch {
-      // نادیده گرفتن خطا
+      setHasError(true);
     } finally {
       setIsLoading(false);
     }
@@ -47,8 +49,7 @@ export const DashboardApp: React.FC = () => {
   const untitledCount = tasks.filter((t) => t.is_untitled_draft).length;
 
   return (
-    <div dir="rtl" className="flex flex-col h-screen w-screen bg-[#141416] text-white">
-      {/* نوار بالایی داشبورد */}
+    <div dir="rtl" className="flex flex-col h-screen w-screen bg-[#141416] text-white select-none">
       <header className="h-16 border-b border-white/10 px-6 flex items-center justify-between shrink-0 bg-[#1C1C20]/50 backdrop-blur-md">
         <div className="flex items-center gap-3">
           <div className="w-8 h-8 rounded-xl bg-blue-600 flex items-center justify-center font-bold text-sm shadow-lg shadow-blue-500/20">
@@ -79,7 +80,6 @@ export const DashboardApp: React.FC = () => {
         </div>
       </header>
 
-      {/* ناوبری تب‌ها */}
       <div className="border-b border-white/10 px-6 flex items-center gap-2 shrink-0 bg-[#141416]">
         {[
           { id: "activity", label: "تایم‌شیت و فعالیت‌ها", icon: Clock },
@@ -116,8 +116,12 @@ export const DashboardApp: React.FC = () => {
         })}
       </div>
 
-      {/* بدنه اسکرول‌شونده محتوای تب فعال */}
       <main className="flex-1 overflow-y-auto p-6">
+        {hasError && (
+          <div className="mb-4 p-3 rounded-xl bg-amber-500/10 border border-amber-500/20 text-xs text-amber-200">
+            داده‌های محلی در حال مقداردهی هستند؛ لطفاً دکمه رفرش را بزنید.
+          </div>
+        )}
         {activeTab === "activity" && (
           <ActivityLogTable tasks={tasks} projects={projects} onRefresh={loadData} />
         )}

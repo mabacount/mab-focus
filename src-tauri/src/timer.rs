@@ -4,14 +4,15 @@ use chrono::Utc;
 use rusqlite::params;
 use serde::{Deserialize, Serialize};
 use std::sync::{Arc, Mutex};
+use std::thread;
+use std::time::Duration;
 use tauri::{AppHandle, Emitter};
-use tokio::time::{sleep, Duration};
 use uuid::Uuid;
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct PomodoroState {
-    pub mode: String,              // "focus" | "short_break" | "long_break"
-    pub status: String,            // "idle" | "running" | "paused" | "overtime"
+    pub mode: String,
+    pub status: String,
     pub elapsed_seconds: i64,
     pub target_seconds: i64,
     pub completed_sets_in_cycle: i32,
@@ -47,42 +48,62 @@ impl AppTimerState {
 }
 
 pub fn spawn_timer_engine(app: AppHandle, state: AppTimerState) {
-    tokio::spawn(async move {
+    thread::spawn(move || {
         let mut overtime_nudge_counter: i64 = 0;
 
         loop {
-            sleep(Duration::from_millis(1000)).await;
+            thread::sleep(Duration::from_millis(1000));
 
-            let mut pomodoro = state.pomodoro.lock().unwrap();
-            let mut active_task = state.active_task.lock().unwrap();
+            // پردازش وضعیت و آزادسازی فوری قفل‌ها جهت جلوگیری از کرش و بن‌بست
+            let (should_emit, sync_payload, start_overtime, nudge_overtime) = {
+                let mut pomodoro = state.pomodoro.lock().unwrap();
+                let mut active_task = state.active_task.lock().unwrap();
 
-            if pomodoro.status == "running" || pomodoro.status == "overtime" {
-                pomodoro.elapsed_seconds += 1;
+                let mut emit_tick = false;
+                let mut is_start_ot = false;
+                let mut is_nudge_ot = false;
 
-                if let Some(task) = active_task.as_mut() {
-                    task.elapsed_task_seconds += 1;
-                    if pomodoro.status == "overtime" {
-                        task.overtime_seconds += 1;
+                if pomodoro.status == "running" || pomodoro.status == "overtime" {
+                    pomodoro.elapsed_seconds += 1;
+                    emit_tick = true;
+
+                    if let Some(task) = active_task.as_mut() {
+                        task.elapsed_task_seconds += 1;
+                        if pomodoro.status == "overtime" {
+                            task.overtime_seconds += 1;
+                        }
                     }
-                }
 
-                if pomodoro.status == "running" && pomodoro.elapsed_seconds >= pomodoro.target_seconds {
-                    pomodoro.status = "overtime".to_string();
-                    overtime_nudge_counter = 0;
-                    app.emit("pomodoro-overtime-started", ()).ok();
-                } else if pomodoro.status == "overtime" {
-                    overtime_nudge_counter += 1;
-                    if overtime_nudge_counter >= 300 {
+                    if pomodoro.status == "running" && pomodoro.elapsed_seconds >= pomodoro.target_seconds {
+                        pomodoro.status = "overtime".to_string();
                         overtime_nudge_counter = 0;
-                        app.emit("pomodoro-overtime-nudge", ()).ok();
+                        is_start_ot = true;
+                    } else if pomodoro.status == "overtime" {
+                        overtime_nudge_counter += 1;
+                        if overtime_nudge_counter >= 300 {
+                            overtime_nudge_counter = 0;
+                            is_nudge_ot = true;
+                        }
                     }
                 }
 
-                let sync_payload = serde_json::json!({
+                let payload = serde_json::json!({
                     "pomodoro": *pomodoro,
                     "task": *active_task
                 });
+
+                (emit_tick, payload, is_start_ot, is_nudge_ot)
+            };
+
+            // ارسال رویدادها خارج از محدوده قفل
+            if should_emit {
                 app.emit("timer-tick", sync_payload).ok();
+            }
+            if start_overtime {
+                app.emit("pomodoro-overtime-started", ()).ok();
+            }
+            if nudge_overtime {
+                app.emit("pomodoro-overtime-nudge", ()).ok();
             }
         }
     });
@@ -92,30 +113,34 @@ pub fn spawn_timer_engine(app: AppHandle, state: AppTimerState) {
 pub fn start_instant_work(
     state: tauri::State<AppTimerState>,
 ) -> Result<String, String> {
-    let mut pomodoro = state.pomodoro.lock().unwrap();
-    let mut active_task = state.active_task.lock().unwrap();
-
     let new_log_id = Uuid::new_v4().to_string();
     let now_iso = Utc::now().to_rfc3339();
 
-    let conn = get_connection().map_err(|e| e.to_string())?;
-    conn.execute(
-        "INSERT INTO task_logs (id, title, is_untitled_draft, start_time, duration_seconds) 
-         VALUES (?1, 'تسک بدون عنوان', 1, ?2, 0)",
-        params![new_log_id, now_iso],
-    ).map_err(|e| e.to_string())?;
+    {
+        let conn = get_connection().map_err(|e| e.to_string())?;
+        conn.execute(
+            "INSERT INTO task_logs (id, title, is_untitled_draft, start_time, duration_seconds) 
+             VALUES (?1, 'تسک بدون عنوان', 1, ?2, 0)",
+            params![new_log_id, now_iso],
+        ).map_err(|e| e.to_string())?;
+    }
 
-    pomodoro.mode = "focus".to_string();
-    pomodoro.status = "running".to_string();
-    pomodoro.elapsed_seconds = 0;
-    pomodoro.target_seconds = 1500;
+    {
+        let mut pomodoro = state.pomodoro.lock().unwrap();
+        let mut active_task = state.active_task.lock().unwrap();
 
-    *active_task = Some(ActiveTaskSlice {
-        log_id: new_log_id.clone(),
-        started_at: now_iso,
-        elapsed_task_seconds: 0,
-        overtime_seconds: 0,
-    });
+        pomodoro.mode = "focus".to_string();
+        pomodoro.status = "running".to_string();
+        pomodoro.elapsed_seconds = 0;
+        pomodoro.target_seconds = 1500;
+
+        *active_task = Some(ActiveTaskSlice {
+            log_id: new_log_id.clone(),
+            started_at: now_iso,
+            elapsed_task_seconds: 0,
+            overtime_seconds: 0,
+        });
+    }
 
     sync_txt_file();
     Ok(new_log_id)
@@ -155,32 +180,34 @@ pub fn switch_task_mid_pomodoro(
     sub_project_id: Option<String>,
     tag_ids_json: String,
 ) -> Result<String, String> {
-    let mut active_task = state.active_task.lock().unwrap();
-    let conn = get_connection().map_err(|e| e.to_string())?;
     let now_iso = Utc::now().to_rfc3339();
-
-    if let Some(current) = active_task.as_ref() {
-        conn.execute(
-            "UPDATE task_logs SET end_time = ?1, duration_seconds = ?2, overtime_seconds = ?3 WHERE id = ?4",
-            params![now_iso, current.elapsed_task_seconds, current.overtime_seconds, current.log_id],
-        ).map_err(|e| e.to_string())?;
-    }
-
     let next_log_id = Uuid::new_v4().to_string();
-    let is_draft = if new_title.trim().is_empty() || new_title == "تسک بدون عنوان" { 1 } else { 0 };
 
-    conn.execute(
-        "INSERT INTO task_logs (id, title, is_untitled_draft, macro_project_id, sub_project_id, tag_ids_json, start_time, duration_seconds)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 0)",
-        params![next_log_id, new_title, is_draft, macro_project_id, sub_project_id, tag_ids_json, now_iso],
-    ).map_err(|e| e.to_string())?;
+    {
+        let mut active_task = state.active_task.lock().unwrap();
+        let conn = get_connection().map_err(|e| e.to_string())?;
 
-    *active_task = Some(ActiveTaskSlice {
-        log_id: next_log_id.clone(),
-        started_at: now_iso,
-        elapsed_task_seconds: 0,
-        overtime_seconds: 0,
-    });
+        if let Some(current) = active_task.as_ref() {
+            conn.execute(
+                "UPDATE task_logs SET end_time = ?1, duration_seconds = ?2, overtime_seconds = ?3 WHERE id = ?4",
+                params![now_iso, current.elapsed_task_seconds, current.overtime_seconds, current.log_id],
+            ).map_err(|e| e.to_string())?;
+        }
+
+        let is_draft = if new_title.trim().is_empty() || new_title == "تسک بدون عنوان" { 1 } else { 0 };
+        conn.execute(
+            "INSERT INTO task_logs (id, title, is_untitled_draft, macro_project_id, sub_project_id, tag_ids_json, start_time, duration_seconds)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 0)",
+            params![next_log_id, new_title, is_draft, macro_project_id, sub_project_id, tag_ids_json, now_iso],
+        ).map_err(|e| e.to_string())?;
+
+        *active_task = Some(ActiveTaskSlice {
+            log_id: next_log_id.clone(),
+            started_at: now_iso,
+            elapsed_task_seconds: 0,
+            overtime_seconds: 0,
+        });
+    }
 
     sync_txt_file();
     Ok(next_log_id)
@@ -188,42 +215,45 @@ pub fn switch_task_mid_pomodoro(
 
 #[tauri::command]
 pub fn start_break(state: tauri::State<AppTimerState>) -> Result<(), String> {
-    let mut pomodoro = state.pomodoro.lock().unwrap();
-    let mut active_task = state.active_task.lock().unwrap();
-    let conn = get_connection().map_err(|e| e.to_string())?;
     let now_iso = Utc::now().to_rfc3339();
 
-    let mut count_as_work = false;
-    if let Some(task) = active_task.as_ref() {
-        let mut stmt = conn.prepare("SELECT macro_project_id FROM task_logs WHERE id = ?1").map_err(|e| e.to_string())?;
-        let macro_id: Option<String> = stmt.query_row(params![task.log_id], |row| row.get(0)).unwrap_or(None);
+    {
+        let mut pomodoro = state.pomodoro.lock().unwrap();
+        let mut active_task = state.active_task.lock().unwrap();
+        let conn = get_connection().map_err(|e| e.to_string())?;
 
-        if let Some(m_id) = macro_id {
-            let mut p_stmt = conn.prepare("SELECT count_short_breaks_as_work FROM projects WHERE id = ?1").map_err(|e| e.to_string())?;
-            count_as_work = p_stmt.query_row(params![m_id], |row| row.get::<_, i32>(0)).unwrap_or(0) == 1;
+        let mut count_as_work = false;
+        if let Some(task) = active_task.as_ref() {
+            let mut stmt = conn.prepare("SELECT macro_project_id FROM task_logs WHERE id = ?1").map_err(|e| e.to_string())?;
+            let macro_id: Option<String> = stmt.query_row(params![task.log_id], |row| row.get(0)).unwrap_or(None);
+
+            if let Some(m_id) = macro_id {
+                let mut p_stmt = conn.prepare("SELECT count_short_breaks_as_work FROM projects WHERE id = ?1").map_err(|e| e.to_string())?;
+                count_as_work = p_stmt.query_row(params![m_id], |row| row.get::<_, i32>(0)).unwrap_or(0) == 1;
+            }
+
+            if !count_as_work {
+                conn.execute(
+                    "UPDATE task_logs SET end_time = ?1, duration_seconds = ?2, overtime_seconds = ?3 WHERE id = ?4",
+                    params![now_iso, task.elapsed_task_seconds, task.overtime_seconds, task.log_id],
+                ).map_err(|e| e.to_string())?;
+                *active_task = None;
+            }
         }
 
-        if !count_as_work {
-            conn.execute(
-                "UPDATE task_logs SET end_time = ?1, duration_seconds = ?2, overtime_seconds = ?3 WHERE id = ?4",
-                params![now_iso, task.elapsed_task_seconds, task.overtime_seconds, task.log_id],
-            ).map_err(|e| e.to_string())?;
-            *active_task = None;
+        pomodoro.completed_sets_in_cycle += 1;
+        if pomodoro.completed_sets_in_cycle >= 4 {
+            pomodoro.mode = "long_break".to_string();
+            pomodoro.target_seconds = 3600;
+            pomodoro.completed_sets_in_cycle = 0;
+        } else {
+            pomodoro.mode = "short_break".to_string();
+            pomodoro.target_seconds = 300;
         }
-    }
 
-    pomodoro.completed_sets_in_cycle += 1;
-    if pomodoro.completed_sets_in_cycle >= 4 {
-        pomodoro.mode = "long_break".to_string();
-        pomodoro.target_seconds = 3600;
-        pomodoro.completed_sets_in_cycle = 0;
-    } else {
-        pomodoro.mode = "short_break".to_string();
-        pomodoro.target_seconds = 300;
+        pomodoro.status = "running".to_string();
+        pomodoro.elapsed_seconds = 0;
     }
-
-    pomodoro.status = "running".to_string();
-    pomodoro.elapsed_seconds = 0;
 
     sync_txt_file();
     Ok(())
