@@ -2,12 +2,14 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen, UnlistenFn } from "@tauri-apps/api/event";
 import { ProjectNode, TaskLogRecord, TimerTickPayload } from "../types/models";
 
-// ۱. شروع فوری کار بدون معطلی
+export async function getTimerState(): Promise<TimerTickPayload> {
+  return await invoke<TimerTickPayload>("get_timer_state");
+}
+
 export async function startInstantWork(): Promise<string> {
   return await invoke<string>("start_instant_work");
 }
 
-// ۲. به‌روزرسانی عنوان و متادیتای تسک در حال اجرا
 export async function updateActiveTaskMetadata(
   logId: string,
   title: string,
@@ -24,7 +26,6 @@ export async function updateActiveTaskMetadata(
   });
 }
 
-// ۳. تعویض تسک در میانه پومودورو
 export async function switchTaskMidPomodoro(
   newTitle: string,
   macroProjectId: string | null,
@@ -39,12 +40,10 @@ export async function switchTaskMidPomodoro(
   });
 }
 
-// ۴. شروع استراحت کوتاه یا طولانی
 export async function startBreak(): Promise<void> {
   await invoke("start_break");
 }
 
-// ۵. توقف موقت و ادامه تایمر
 export async function pauseTimer(): Promise<void> {
   await invoke("pause_timer");
 }
@@ -53,16 +52,34 @@ export async function resumeTimer(): Promise<void> {
   await invoke("resume_timer");
 }
 
-// ۶. دریافت داده‌ها برای داشبورد
+export async function stopAndResetTimer(): Promise<void> {
+  await invoke("stop_and_reset_timer");
+}
+
+export async function openDashboardWindow(): Promise<void> {
+  await invoke("open_dashboard_window");
+}
+
 export async function getAllProjects(): Promise<ProjectNode[]> {
   return await invoke<ProjectNode[]>("get_all_projects");
+}
+
+export async function updateProjectPolicy(
+  id: string,
+  countShortBreaksAsWork: boolean,
+  countLongBreaksAsWork: boolean
+): Promise<void> {
+  await invoke("update_project_policy", {
+    id,
+    countShortBreaksAsWork,
+    countLongBreaksAsWork,
+  });
 }
 
 export async function getAllTaskLogs(): Promise<TaskLogRecord[]> {
   return await invoke<TaskLogRecord[]>("get_all_task_logs");
 }
 
-// ۷. ثبت ویرایش زمان در داشبورد همراه با اعمال قوانین ممیزی
 export async function updateTaskLog(params: {
   id: string;
   title: string;
@@ -87,12 +104,31 @@ export async function updateTaskLog(params: {
   });
 }
 
-// ۸. گوش دادن به رویدادهای زنده تایمر ارسالی از Rust
+export async function deleteTaskLog(id: string): Promise<void> {
+  await invoke("delete_task_log", { id });
+}
+
+export async function getAllSettings(): Promise<Record<string, string>> {
+  return await invoke<Record<string, string>>("get_all_settings");
+}
+
+export async function saveAppSetting(key: string, value: string): Promise<void> {
+  await invoke("save_app_setting", { key, value });
+}
+
 export async function onTimerTick(
   callback: (payload: TimerTickPayload) => void
 ): Promise<UnlistenFn> {
   return await listen<TimerTickPayload>("timer-tick", (event) => {
     callback(event.payload);
+  });
+}
+
+export async function onTasksChanged(
+  callback: () => void
+): Promise<UnlistenFn> {
+  return await listen("tasks-changed", () => {
+    callback();
   });
 }
 

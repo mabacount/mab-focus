@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from "react";
 import { TaskLogRecord, ProjectNode } from "../types/models";
-import { getAllProjects, getAllTaskLogs } from "../services/ipc";
+import { getAllProjects, getAllTaskLogs, onTasksChanged } from "../services/ipc";
 import { exportTasksToExcel } from "../services/exporter";
 import { ActivityLogTable } from "./ActivityLogTable";
 import { UntitledInbox } from "./UntitledInbox";
@@ -23,11 +23,9 @@ export const DashboardApp: React.FC = () => {
   const [tasks, setTasks] = useState<TaskLogRecord[]>([]);
   const [projects, setProjects] = useState<ProjectNode[]>([]);
   const [isLoading, setIsLoading] = useState(false);
-  const [hasError, setHasError] = useState(false);
 
   const loadData = async () => {
     setIsLoading(true);
-    setHasError(false);
     try {
       const [fetchedTasks, fetchedProjects] = await Promise.all([
         getAllTaskLogs().catch(() => []),
@@ -35,8 +33,6 @@ export const DashboardApp: React.FC = () => {
       ]);
       setTasks(fetchedTasks || []);
       setProjects(fetchedProjects || []);
-    } catch {
-      setHasError(true);
     } finally {
       setIsLoading(false);
     }
@@ -44,6 +40,15 @@ export const DashboardApp: React.FC = () => {
 
   useEffect(() => {
     loadData();
+
+    let unlisten: (() => void) | undefined;
+    onTasksChanged(() => {
+      loadData();
+    }).then((fn) => (unlisten = fn));
+
+    return () => {
+      if (unlisten) unlisten();
+    };
   }, []);
 
   const untitledCount = tasks.filter((t) => t.is_untitled_draft).length;
@@ -117,11 +122,6 @@ export const DashboardApp: React.FC = () => {
       </div>
 
       <main className="flex-1 overflow-y-auto p-6">
-        {hasError && (
-          <div className="mb-4 p-3 rounded-xl bg-amber-500/10 border border-amber-500/20 text-xs text-amber-200">
-            داده‌های محلی در حال مقداردهی هستند؛ لطفاً دکمه رفرش را بزنید.
-          </div>
-        )}
         {activeTab === "activity" && (
           <ActivityLogTable tasks={tasks} projects={projects} onRefresh={loadData} />
         )}

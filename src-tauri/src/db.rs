@@ -1,5 +1,6 @@
 use rusqlite::{params, Connection, Result};
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
 
@@ -11,14 +12,6 @@ pub struct ProjectRecord {
     pub count_short_breaks_as_work: bool,
     pub count_long_breaks_as_work: bool,
     pub color: String,
-    pub archived: bool,
-}
-
-#[derive(Debug, Serialize, Deserialize, Clone)]
-pub struct PhaseTagRecord {
-    pub id: String,
-    pub name: String,
-    pub category: String,
     pub archived: bool,
 }
 
@@ -48,7 +41,7 @@ pub struct TaskLogRecord {
 pub fn get_db_path() -> PathBuf {
     let mut path = dirs::data_dir().unwrap_or_else(|| PathBuf::from("."));
     path.push("MabFocus");
-    fs::create_dir_all(&path).ok();
+    let _ = fs::create_dir_all(&path);
     path.push("mabfocus.db");
     path
 }
@@ -106,10 +99,44 @@ pub fn init_db() -> Result<()> {
             key TEXT PRIMARY KEY,
             value TEXT NOT NULL
         );
-        "
+
+        INSERT OR IGNORE INTO app_settings (key, value) VALUES ('focus_minutes', '25');
+        INSERT OR IGNORE INTO app_settings (key, value) VALUES ('short_break_minutes', '5');
+        INSERT OR IGNORE INTO app_settings (key, value) VALUES ('long_break_minutes', '60');
+        INSERT OR IGNORE INTO app_settings (key, value) VALUES ('sync_level', 'task');
+        ",
     )?;
 
     Ok(())
+}
+
+pub fn read_all_settings_map() -> HashMap<String, String> {
+    let mut map = HashMap::new();
+    if let Ok(conn) = get_connection() {
+        if let Ok(mut stmt) = conn.prepare("SELECT key, value FROM app_settings") {
+            if let Ok(rows) = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))) {
+                for r in rows.flatten() {
+                    map.insert(r.0, r.1);
+                }
+            }
+        }
+    }
+    map
+}
+
+pub fn get_setting_i64(key: &str, default_val: i64) -> i64 {
+    if let Ok(conn) = get_connection() {
+        if let Ok(mut stmt) = conn.prepare("SELECT value FROM app_settings WHERE key = ?1") {
+            if let Ok(val_str) = stmt.query_row(params![key], |r| r.get::<_, String>(0)) {
+                if let Ok(parsed) = val_str.trim().parse::<i64>() {
+                    if parsed > 0 {
+                        return parsed;
+                    }
+                }
+            }
+        }
+    }
+    default_val
 }
 
 pub fn update_task_log_logic(
@@ -169,10 +196,12 @@ pub fn update_task_log_logic(
         edited_at = Some(chrono::Utc::now().to_rfc3339());
     }
 
-    let is_still_untitled = if !new_title.trim().is_empty() && new_title != "تسک بدون عنوان" {
+    let is_still_untitled = if !new_title.trim().is_empty() && new_title.trim() != "تسک بدون عنوان" {
         0
+    } else if old_record.is_untitled_draft {
+        1
     } else {
-        if old_record.is_untitled_draft { 1 } else { 0 }
+        0
     };
 
     conn.execute(
@@ -193,7 +222,7 @@ pub fn update_task_log_logic(
             edit_note = ?14
          WHERE id = ?15",
         params![
-            new_title,
+            new_title.trim(),
             is_still_untitled,
             new_macro_id,
             new_sub_id,

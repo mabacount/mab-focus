@@ -6,20 +6,32 @@ mod timer;
 mod txt_logger;
 
 use db::{
-    get_connection, init_db, update_task_log_logic, PhaseTagRecord, ProjectRecord,
+    get_connection, init_db, read_all_settings_map, update_task_log_logic, ProjectRecord,
     TaskLogRecord,
 };
 use gcal_sync::{
-    get_sync_setting, process_offline_sync_queue, set_sync_setting,
-    GoogleCalendarEventPayload,
+    get_sync_setting, process_offline_sync_queue, set_sync_setting, GoogleCalendarEventPayload,
 };
 use rusqlite::params;
+use std::collections::HashMap;
+use tauri::{AppHandle, Emitter, Manager};
 use timer::{
-    pause_timer, resume_timer, spawn_timer_engine, start_break, start_instant_work,
-    switch_task_mid_pomodoro, update_active_task_metadata, AppTimerState,
+    broadcast_state_now, get_timer_state, pause_timer, resume_timer, spawn_timer_engine,
+    start_break, start_instant_work, stop_and_reset_timer, switch_task_mid_pomodoro,
+    update_active_task_metadata, AppTimerState,
 };
 use txt_logger::sync_txt_file;
 use uuid::Uuid;
+
+#[tauri::command]
+fn open_dashboard_window(app: AppHandle) -> Result<(), String> {
+    if let Some(win) = app.get_webview_window("main") {
+        let _ = win.unminimize();
+        let _ = win.show();
+        let _ = win.set_focus();
+    }
+    Ok(())
+}
 
 #[tauri::command]
 fn create_project(
@@ -37,7 +49,7 @@ fn create_project(
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, 0)",
         params![
             new_id,
-            name,
+            name.trim(),
             parent_id,
             if count_short_breaks_as_work { 1 } else { 0 },
             if count_long_breaks_as_work { 1 } else { 0 },
@@ -47,6 +59,25 @@ fn create_project(
     .map_err(|e| e.to_string())?;
 
     Ok(new_id)
+}
+
+#[tauri::command]
+fn update_project_policy(
+    id: String,
+    count_short_breaks_as_work: bool,
+    count_long_breaks_as_work: bool,
+) -> Result<(), String> {
+    let conn = get_connection().map_err(|e| e.to_string())?;
+    conn.execute(
+        "UPDATE projects SET count_short_breaks_as_work = ?1, count_long_breaks_as_work = ?2 WHERE id = ?3",
+        params![
+            if count_short_breaks_as_work { 1 } else { 0 },
+            if count_long_breaks_as_work { 1 } else { 0 },
+            id
+        ],
+    )
+    .map_err(|e| e.to_string())?;
+    Ok(())
 }
 
 #[tauri::command]
@@ -111,6 +142,7 @@ fn get_all_task_logs() -> Result<Vec<TaskLogRecord>, String> {
 
 #[tauri::command]
 fn update_task_log(
+    app: AppHandle,
     id: String,
     title: String,
     macro_id: Option<String>,
@@ -137,6 +169,17 @@ fn update_task_log(
     .map_err(|e| e.to_string())?;
 
     sync_txt_file();
+    let _ = app.emit("tasks-changed", ());
+    Ok(())
+}
+
+#[tauri::command]
+fn delete_task_log(app: AppHandle, id: String) -> Result<(), String> {
+    let conn = get_connection().map_err(|e| e.to_string())?;
+    conn.execute("DELETE FROM task_logs WHERE id = ?1", params![id])
+        .map_err(|e| e.to_string())?;
+    sync_txt_file();
+    let _ = app.emit("tasks-changed", ());
     Ok(())
 }
 
@@ -146,8 +189,29 @@ fn get_calendar_sync_queue() -> Result<Vec<GoogleCalendarEventPayload>, String> 
 }
 
 #[tauri::command]
-fn save_app_setting(key: String, value: String) -> Result<(), String> {
-    set_sync_setting(&key, &value)
+fn save_app_setting(
+    app: AppHandle,
+    state: tauri::State<AppTimerState>,
+    key: String,
+    value: String,
+) -> Result<(), String> {
+    set_sync_setting(&key, &value)?;
+
+    // اگر تایمر در حالت آماده به کار (idle) است، زمان هدف جدید بلافاصله اعمال شود
+    if key == "focus_minutes" {
+        if let Ok(mins) = value.trim().parse::<i64>() {
+            if mins > 0 {
+                let mut pomo = state.pomodoro.lock().unwrap_or_else(|e| e.into_inner());
+                if pomo.status == "idle" && pomo.mode == "focus" {
+                    pomo.target_seconds = mins * 60;
+                }
+            }
+        }
+        broadcast_state_now(&app, &state);
+    }
+
+    sync_txt_file();
+    Ok(())
 }
 
 #[tauri::command]
@@ -155,8 +219,13 @@ fn read_app_setting(key: String) -> Result<Option<String>, String> {
     Ok(get_sync_setting(&key))
 }
 
+#[tauri::command]
+fn get_all_settings() -> Result<HashMap<String, String>, String> {
+    Ok(read_all_settings_map())
+}
+
 fn main() {
-    init_db().expect("Failed to initialize SQLite database for Mab-Focus");
+    let _ = init_db();
 
     let timer_state = AppTimerState::new();
 
@@ -167,19 +236,25 @@ fn main() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            get_timer_state,
             start_instant_work,
             update_active_task_metadata,
             switch_task_mid_pomodoro,
             start_break,
             pause_timer,
             resume_timer,
+            stop_and_reset_timer,
+            open_dashboard_window,
             create_project,
+            update_project_policy,
             get_all_projects,
             get_all_task_logs,
             update_task_log,
+            delete_task_log,
             get_calendar_sync_queue,
             save_app_setting,
-            read_app_setting
+            read_app_setting,
+            get_all_settings
         ])
         .run(tauri::generate_context!())
         .expect("error while running Mab-Focus application");
