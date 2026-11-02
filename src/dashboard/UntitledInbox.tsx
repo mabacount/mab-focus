@@ -66,7 +66,7 @@ export const UntitledInbox: React.FC<UntitledInboxProps> = ({
         tagIds: assignedTags,
         startTime: task.start_time,
         endTime: task.end_time,
-        durationSeconds: task.duration_seconds,
+        durationSeconds: Math.round(task.duration_seconds || 0),
         editNote: task.edit_note,
       });
       onRefresh();

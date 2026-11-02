@@ -70,14 +70,14 @@ export const QuickTaskPopover: React.FC<QuickTaskPopoverProps> = ({
   const handleSwitchNextTask = async () => {
     setIsSubmitting(true);
     try {
-      const nextLogId = await switchTaskMidPomodoro(
+      const payload = await switchTaskMidPomodoro(
         title.trim() || "تسک بدون عنوان",
         macroProjectId,
         subProjectId,
         selectedTags
       );
       soundFx.playClickStart();
-      if (onTaskSwitched) onTaskSwitched(nextLogId);
+      if (onTaskSwitched && payload.task) onTaskSwitched(payload.task.log_id);
       setTitle("");
       setSelectedTags([]);
       onClose();
@@ -99,9 +99,7 @@ export const QuickTaskPopover: React.FC<QuickTaskPopoverProps> = ({
       </div>
 
       <div>
-        <label className="block text-[11px] text-white/60 mb-1">
-          در حال انجام چه کاری هستید؟
-        </label>
+        <label className="block text-[11px] text-white/60 mb-1">در حال انجام چه کاری هستید؟</label>
         <input
           type="text"
           dir="auto"
@@ -113,7 +111,6 @@ export const QuickTaskPopover: React.FC<QuickTaskPopoverProps> = ({
         />
       </div>
 
-      {/* انتخابگر یکپارچه پروژه با جست‌وجوی درجا */}
       <div>
         <label className="block text-[10px] text-white/60 mb-1">پروژه و زیرپروژه</label>
         <ProjectSelector

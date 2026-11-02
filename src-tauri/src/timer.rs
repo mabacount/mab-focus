@@ -26,6 +26,12 @@ pub struct ActiveTaskSlice {
     pub overtime_seconds: i64,
 }
 
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct FullTimerPayload {
+    pub pomodoro: PomodoroState,
+    pub task: Option<ActiveTaskSlice>,
+}
+
 #[derive(Clone)]
 pub struct AppTimerState {
     pub pomodoro: Arc<Mutex<PomodoroState>>,
@@ -46,19 +52,17 @@ impl AppTimerState {
             active_task: Arc::new(Mutex::new(None)),
         }
     }
+
+    pub fn get_payload(&self) -> FullTimerPayload {
+        let pomo = self.pomodoro.lock().unwrap_or_else(|e| e.into_inner()).clone();
+        let task = self.active_task.lock().unwrap_or_else(|e| e.into_inner()).clone();
+        FullTimerPayload { pomodoro: pomo, task }
+    }
 }
 
-/// ارسال فوری وضعیت فعلی به تمام پنجره‌ها بدون نگه‌داشتن قفل حافظه
 pub fn broadcast_state_now(app: &AppHandle, state: &AppTimerState) {
-    let payload = {
-        let pomo = state.pomodoro.lock().unwrap_or_else(|e| e.into_inner());
-        let task = state.active_task.lock().unwrap_or_else(|e| e.into_inner());
-        serde_json::json!({
-            "pomodoro": *pomo,
-            "task": *task
-        })
-    };
-    let _ = app.emit("timer-tick", payload);
+    let payload = state.get_payload();
+    let _ = app.emit("timer-tick", &payload);
 }
 
 pub fn spawn_timer_engine(app: AppHandle, state: AppTimerState) {
@@ -100,16 +104,16 @@ pub fn spawn_timer_engine(app: AppHandle, state: AppTimerState) {
                     }
                 }
 
-                let payload = serde_json::json!({
-                    "pomodoro": *pomodoro,
-                    "task": *active_task
-                });
+                let payload = FullTimerPayload {
+                    pomodoro: pomodoro.clone(),
+                    task: active_task.clone(),
+                };
 
                 (emit_tick, payload, is_start_ot, is_nudge_ot)
             };
 
             if should_emit {
-                let _ = app.emit("timer-tick", sync_payload);
+                let _ = app.emit("timer-tick", &sync_payload);
             }
             if start_overtime {
                 let _ = app.emit("pomodoro-overtime-started", ());
@@ -122,20 +126,15 @@ pub fn spawn_timer_engine(app: AppHandle, state: AppTimerState) {
 }
 
 #[tauri::command]
-pub fn get_timer_state(state: tauri::State<AppTimerState>) -> Result<serde_json::Value, String> {
-    let pomo = state.pomodoro.lock().unwrap_or_else(|e| e.into_inner());
-    let task = state.active_task.lock().unwrap_or_else(|e| e.into_inner());
-    Ok(serde_json::json!({
-        "pomodoro": *pomo,
-        "task": *task
-    }))
+pub fn get_timer_state(state: tauri::State<AppTimerState>) -> Result<FullTimerPayload, String> {
+    Ok(state.get_payload())
 }
 
 #[tauri::command]
 pub fn start_instant_work(
     app: AppHandle,
     state: tauri::State<AppTimerState>,
-) -> Result<String, String> {
+) -> Result<FullTimerPayload, String> {
     let new_log_id = Uuid::new_v4().to_string();
     let now_iso = Utc::now().to_rfc3339();
     let focus_secs = get_setting_i64("focus_minutes", 25) * 60;
@@ -158,7 +157,7 @@ pub fn start_instant_work(
         pomodoro.target_seconds = focus_secs;
 
         *active_task = Some(ActiveTaskSlice {
-            log_id: new_log_id.clone(),
+            log_id: new_log_id,
             started_at: now_iso,
             elapsed_task_seconds: 0,
             overtime_seconds: 0,
@@ -168,97 +167,14 @@ pub fn start_instant_work(
     sync_txt_file();
     broadcast_state_now(&app, &state);
     let _ = app.emit("tasks-changed", ());
-    Ok(new_log_id)
-}
-
-#[tauri::command]
-pub fn update_active_task_metadata(
-    app: AppHandle,
-    log_id: String,
-    title: String,
-    macro_project_id: Option<String>,
-    sub_project_id: Option<String>,
-    tag_ids_json: String,
-) -> Result<(), String> {
-    let conn = get_connection().map_err(|e| e.to_string())?;
-    let clean_title = if title.trim().is_empty() {
-        "تسک بدون عنوان"
-    } else {
-        title.trim()
-    };
-    let is_draft = if clean_title == "تسک بدون عنوان" { 1 } else { 0 };
-
-    conn.execute(
-        "UPDATE task_logs SET 
-            title = ?1,
-            macro_project_id = ?2,
-            sub_project_id = ?3,
-            tag_ids_json = ?4,
-            is_untitled_draft = ?5
-         WHERE id = ?6",
-        params![clean_title, macro_project_id, sub_project_id, tag_ids_json, is_draft, log_id],
-    )
-    .map_err(|e| e.to_string())?;
-
-    sync_txt_file();
-    let _ = app.emit("tasks-changed", ());
-    Ok(())
-}
-
-#[tauri::command]
-pub fn switch_task_mid_pomodoro(
-    app: AppHandle,
-    state: tauri::State<AppTimerState>,
-    new_title: String,
-    macro_project_id: Option<String>,
-    sub_project_id: Option<String>,
-    tag_ids_json: String,
-) -> Result<String, String> {
-    let now_iso = Utc::now().to_rfc3339();
-    let next_log_id = Uuid::new_v4().to_string();
-    let clean_title = if new_title.trim().is_empty() {
-        "تسک بدون عنوان"
-    } else {
-        new_title.trim()
-    };
-
-    {
-        let mut active_task = state.active_task.lock().unwrap_or_else(|e| e.into_inner());
-        if let Ok(conn) = get_connection() {
-            if let Some(current) = active_task.as_ref() {
-                let _ = conn.execute(
-                    "UPDATE task_logs SET end_time = ?1, duration_seconds = ?2, overtime_seconds = ?3 WHERE id = ?4",
-                    params![now_iso, current.elapsed_task_seconds, current.overtime_seconds, current.log_id],
-                );
-            }
-
-            let is_draft = if clean_title == "تسک بدون عنوان" { 1 } else { 0 };
-            let _ = conn.execute(
-                "INSERT INTO task_logs (id, title, is_untitled_draft, macro_project_id, sub_project_id, tag_ids_json, start_time, duration_seconds)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 0)",
-                params![next_log_id, clean_title, is_draft, macro_project_id, sub_project_id, tag_ids_json, now_iso],
-            );
-        }
-
-        *active_task = Some(ActiveTaskSlice {
-            log_id: next_log_id.clone(),
-            started_at: now_iso,
-            elapsed_task_seconds: 0,
-            overtime_seconds: 0,
-        });
-    }
-
-    sync_txt_file();
-    broadcast_state_now(&app, &state);
-    let _ = app.emit("tasks-changed", ());
-    Ok(next_log_id)
+    Ok(state.get_payload())
 }
 
 #[tauri::command]
 pub fn start_break(
     app: AppHandle,
     state: tauri::State<AppTimerState>,
-) -> Result<(), String> {
+) -> Result<FullTimerPayload, String> {
     let now_iso = Utc::now().to_rfc3339();
     let short_break_secs = get_setting_i64("short_break_minutes", 5) * 60;
     let long_break_secs = get_setting_i64("long_break_minutes", 60) * 60;
@@ -276,11 +192,7 @@ pub fn start_break(
                 if let Ok(mut stmt) = conn.prepare("SELECT macro_project_id FROM task_logs WHERE id = ?1") {
                     let macro_id: Option<String> = stmt.query_row(params![task.log_id], |row| row.get(0)).unwrap_or(None);
                     if let Some(m_id) = macro_id {
-                        let col = if is_long_break {
-                            "count_long_breaks_as_work"
-                        } else {
-                            "count_short_breaks_as_work"
-                        };
+                        let col = if is_long_break { "count_long_breaks_as_work" } else { "count_short_breaks_as_work" };
                         let query = format!("SELECT {} FROM projects WHERE id = ?1", col);
                         if let Ok(mut p_stmt) = conn.prepare(&query) {
                             count_as_work = p_stmt.query_row(params![m_id], |row| row.get::<_, i32>(0)).unwrap_or(0) == 1;
@@ -315,11 +227,11 @@ pub fn start_break(
     sync_txt_file();
     broadcast_state_now(&app, &state);
     let _ = app.emit("tasks-changed", ());
-    Ok(())
+    Ok(state.get_payload())
 }
 
 #[tauri::command]
-pub fn pause_timer(app: AppHandle, state: tauri::State<AppTimerState>) -> Result<(), String> {
+pub fn pause_timer(app: AppHandle, state: tauri::State<AppTimerState>) -> Result<FullTimerPayload, String> {
     {
         let mut pomodoro = state.pomodoro.lock().unwrap_or_else(|e| e.into_inner());
         if pomodoro.status == "running" || pomodoro.status == "overtime" {
@@ -327,11 +239,11 @@ pub fn pause_timer(app: AppHandle, state: tauri::State<AppTimerState>) -> Result
         }
     }
     broadcast_state_now(&app, &state);
-    Ok(())
+    Ok(state.get_payload())
 }
 
 #[tauri::command]
-pub fn resume_timer(app: AppHandle, state: tauri::State<AppTimerState>) -> Result<(), String> {
+pub fn resume_timer(app: AppHandle, state: tauri::State<AppTimerState>) -> Result<FullTimerPayload, String> {
     {
         let mut pomodoro = state.pomodoro.lock().unwrap_or_else(|e| e.into_inner());
         if pomodoro.status == "paused" {
@@ -343,11 +255,11 @@ pub fn resume_timer(app: AppHandle, state: tauri::State<AppTimerState>) -> Resul
         }
     }
     broadcast_state_now(&app, &state);
-    Ok(())
+    Ok(state.get_payload())
 }
 
 #[tauri::command]
-pub fn stop_and_reset_timer(app: AppHandle, state: tauri::State<AppTimerState>) -> Result<(), String> {
+pub fn stop_and_reset_timer(app: AppHandle, state: tauri::State<AppTimerState>) -> Result<FullTimerPayload, String> {
     let now_iso = Utc::now().to_rfc3339();
     let focus_secs = get_setting_i64("focus_minutes", 25) * 60;
 
@@ -374,5 +286,79 @@ pub fn stop_and_reset_timer(app: AppHandle, state: tauri::State<AppTimerState>) 
     sync_txt_file();
     broadcast_state_now(&app, &state);
     let _ = app.emit("tasks-changed", ());
+    Ok(state.get_payload())
+}
+
+#[tauri::command]
+pub fn update_active_task_metadata(
+    app: AppHandle,
+    log_id: String,
+    title: String,
+    macro_project_id: Option<String>,
+    sub_project_id: Option<String>,
+    tag_ids_json: String,
+) -> Result<(), String> {
+    let conn = get_connection().map_err(|e| e.to_string())?;
+    let clean_title = if title.trim().is_empty() { "تسک بدون عنوان" } else { title.trim() };
+    let is_draft = if clean_title == "تسک بدون عنوان" { 1 } else { 0 };
+
+    conn.execute(
+        "UPDATE task_logs SET 
+            title = ?1,
+            macro_project_id = ?2,
+            sub_project_id = ?3,
+            tag_ids_json = ?4,
+            is_untitled_draft = ?5
+         WHERE id = ?6",
+        params![clean_title, macro_project_id, sub_project_id, tag_ids_json, is_draft, log_id],
+    ).map_err(|e| e.to_string())?;
+
+    sync_txt_file();
+    let _ = app.emit("tasks-changed", ());
     Ok(())
+}
+
+#[tauri::command]
+pub fn switch_task_mid_pomodoro(
+    app: AppHandle,
+    state: tauri::State<AppTimerState>,
+    new_title: String,
+    macro_project_id: Option<String>,
+    sub_project_id: Option<String>,
+    tag_ids_json: String,
+) -> Result<FullTimerPayload, String> {
+    let now_iso = Utc::now().to_rfc3339();
+    let next_log_id = Uuid::new_v4().to_string();
+    let clean_title = if new_title.trim().is_empty() { "تسک بدون عنوان" } else { new_title.trim() };
+
+    {
+        let mut active_task = state.active_task.lock().unwrap_or_else(|e| e.into_inner());
+        if let Ok(conn) = get_connection() {
+            if let Some(current) = active_task.as_ref() {
+                let _ = conn.execute(
+                    "UPDATE task_logs SET end_time = ?1, duration_seconds = ?2, overtime_seconds = ?3 WHERE id = ?4",
+                    params![now_iso, current.elapsed_task_seconds, current.overtime_seconds, current.log_id],
+                );
+            }
+
+            let is_draft = if clean_title == "تسک بدون عنوان" { 1 } else { 0 };
+            let _ = conn.execute(
+                "INSERT INTO task_logs (id, title, is_untitled_draft, macro_project_id, sub_project_id, tag_ids_json, start_time, duration_seconds)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 0)",
+                params![next_log_id, clean_title, is_draft, macro_project_id, sub_project_id, tag_ids_json, now_iso],
+            );
+        }
+
+        *active_task = Some(ActiveTaskSlice {
+            log_id: next_log_id,
+            started_at: now_iso,
+            elapsed_task_seconds: 0,
+            overtime_seconds: 0,
+        });
+    }
+
+    sync_txt_file();
+    broadcast_state_now(&app, &state);
+    let _ = app.emit("tasks-changed", ());
+    Ok(state.get_payload())
 }

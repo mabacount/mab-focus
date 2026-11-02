@@ -22,7 +22,6 @@ export const ProjectSelector: React.FC<ProjectSelectorProps> = ({
   const containerRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
-  // بستن لیست با کلیک بیرون از کامپوننت
   useEffect(() => {
     const handleClickOutside = (e: MouseEvent) => {
       if (containerRef.current && !containerRef.current.contains(e.target as Node)) {
@@ -42,7 +41,6 @@ export const ProjectSelector: React.FC<ProjectSelectorProps> = ({
   const activeProjects = projects.filter((p) => !p.archived);
   const macroProjects = activeProjects.filter((p) => !p.parent_id);
 
-  // یافتن عنوان نمایشی فعلی
   let currentLabel = "بدون پروژه";
   let currentColor: string | null = null;
 
@@ -63,12 +61,10 @@ export const ProjectSelector: React.FC<ProjectSelectorProps> = ({
     }
   }
 
-  // فیلتر کردن درختی بر اساس عبارت جست‌وجو
   const q = searchQuery.trim().toLowerCase();
 
   return (
     <div ref={containerRef} dir="rtl" className={`relative w-full ${className}`}>
-      {/* دکمه اصلی انتخاب */}
       <button
         type="button"
         onClick={() => setIsOpen(!isOpen)}
@@ -88,10 +84,8 @@ export const ProjectSelector: React.FC<ProjectSelectorProps> = ({
         <ChevronDown size={14} className="text-white/40 shrink-0" />
       </button>
 
-      {/* منوی بازشونده جست‌وجو و لیست سلسله‌مراتبی */}
       {isOpen && (
         <div className="absolute top-full right-0 mt-1.5 w-full min-w-[240px] max-h-64 bg-[#1C1C20] border border-white/10 rounded-xl shadow-2xl z-50 flex flex-col overflow-hidden">
-          {/* فیلد جست‌وجو با فیلتر درجا */}
           <div className="p-2 border-b border-white/10 flex items-center gap-1.5 bg-[#141416]/60">
             <Search size={13} className="text-white/40 shrink-0 mr-1" />
             <input
@@ -114,9 +108,7 @@ export const ProjectSelector: React.FC<ProjectSelectorProps> = ({
             )}
           </div>
 
-          {/* لیست اسکرول‌شونده */}
           <div className="overflow-y-auto p-1 text-xs space-y-0.5 max-h-48">
-            {/* گزینه بدون پروژه */}
             <div
               onClick={() => {
                 onSelect(null, null);
@@ -134,8 +126,6 @@ export const ProjectSelector: React.FC<ProjectSelectorProps> = ({
 
             {macroProjects.map((macro) => {
               const subItems = activeProjects.filter((p) => p.parent_id === macro.id);
-
-              // بررسی تطابق جست‌وجو
               const matchesMacro = macro.name.toLowerCase().includes(q);
               const matchingSubs = subItems.filter((s) => s.name.toLowerCase().includes(q));
 
@@ -147,7 +137,6 @@ export const ProjectSelector: React.FC<ProjectSelectorProps> = ({
 
               return (
                 <div key={macro.id} className="space-y-0.5">
-                  {/* ردیف پروژه کلان با دایره شاخص */}
                   <div
                     onClick={() => {
                       onSelect(macro.id, null);
@@ -169,7 +158,6 @@ export const ProjectSelector: React.FC<ProjectSelectorProps> = ({
                     {isMacroSelected && <Check size={13} />}
                   </div>
 
-                  {/* زیرپروژه‌ها با فرورفتگی مشخص زیر پروژه کلان */}
                   {subItems.map((sub) => {
                     if (q && !matchesMacro && !sub.name.toLowerCase().includes(q)) {
                       return null;

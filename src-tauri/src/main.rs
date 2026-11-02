@@ -26,14 +26,14 @@ use uuid::Uuid;
 #[tauri::command]
 fn open_dashboard_window(app: AppHandle) -> Result<(), String> {
     if let Some(win) = app.get_webview_window("main") {
-        let _ = win.unminimize();
         let _ = win.show();
+        let _ = win.unminimize();
         let _ = win.set_focus();
     } else {
         let _ = tauri::WebviewWindowBuilder::new(
             &app,
             "main",
-            tauri::WebviewUrl::App("/".into()),
+            tauri::WebviewUrl::App("index.html".into()),
         )
         .title("Mab-Focus — Dashboard")
         .inner_size(1150.0, 760.0)
@@ -66,8 +66,7 @@ fn create_project(
             if count_long_breaks_as_work { 1 } else { 0 },
             color
         ],
-    )
-    .map_err(|e| e.to_string())?;
+    ).map_err(|e| e.to_string())?;
 
     Ok(new_id)
 }
@@ -86,8 +85,7 @@ fn update_project_policy(
             if count_long_breaks_as_work { 1 } else { 0 },
             id
         ],
-    )
-    .map_err(|e| e.to_string())?;
+    ).map_err(|e| e.to_string())?;
     Ok(())
 }
 
@@ -119,7 +117,7 @@ fn get_all_projects() -> Result<Vec<ProjectRecord>, String> {
 fn get_all_task_logs() -> Result<Vec<TaskLogRecord>, String> {
     let conn = get_connection().map_err(|e| e.to_string())?;
     let mut stmt = conn
-        .prepare("SELECT * FROM task_logs ORDER BY start_time DESC")
+        .prepare("SELECT id, title, is_untitled_draft, macro_project_id, sub_project_id, tag_ids_json, start_time, end_time, duration_seconds, overtime_seconds, pomodoro_set_index, is_edited, original_start_time, original_end_time, original_duration_seconds, edited_at, edit_note, sync_status, calendar_event_id FROM task_logs ORDER BY start_time DESC")
         .map_err(|e| e.to_string())?;
 
     let rows = stmt
@@ -176,8 +174,7 @@ fn update_task_log(
         end_time,
         duration_seconds,
         edit_note,
-    )
-    .map_err(|e| e.to_string())?;
+    ).map_err(|e| e.to_string())?;
 
     sync_txt_file();
     let _ = app.emit("tasks-changed", ());
@@ -242,7 +239,6 @@ fn main() {
         .manage(timer_state.clone())
         .on_window_event(|window, event| {
             if let WindowEvent::CloseRequested { api, .. } = event {
-                // با زدن ضربدر پنجره اصلی تخریب نشود، بلکه مخفی گردد تا ارتباط قطع نشود
                 if window.label() == "main" {
                     let _ = window.hide();
                     api.prevent_close();

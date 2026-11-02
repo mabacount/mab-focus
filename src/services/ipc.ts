@@ -6,8 +6,24 @@ export async function getTimerState(): Promise<TimerTickPayload> {
   return await invoke<TimerTickPayload>("get_timer_state");
 }
 
-export async function startInstantWork(): Promise<string> {
-  return await invoke<string>("start_instant_work");
+export async function startInstantWork(): Promise<TimerTickPayload> {
+  return await invoke<TimerTickPayload>("start_instant_work");
+}
+
+export async function startBreak(): Promise<TimerTickPayload> {
+  return await invoke<TimerTickPayload>("start_break");
+}
+
+export async function pauseTimer(): Promise<TimerTickPayload> {
+  return await invoke<TimerTickPayload>("pause_timer");
+}
+
+export async function resumeTimer(): Promise<TimerTickPayload> {
+  return await invoke<TimerTickPayload>("resume_timer");
+}
+
+export async function stopAndResetTimer(): Promise<TimerTickPayload> {
+  return await invoke<TimerTickPayload>("stop_and_reset_timer");
 }
 
 export async function updateActiveTaskMetadata(
@@ -31,29 +47,13 @@ export async function switchTaskMidPomodoro(
   macroProjectId: string | null,
   subProjectId: string | null,
   tagIds: string[]
-): Promise<string> {
-  return await invoke<string>("switch_task_mid_pomodoro", {
+): Promise<TimerTickPayload> {
+  return await invoke<TimerTickPayload>("switch_task_mid_pomodoro", {
     newTitle,
     macroProjectId,
     subProjectId,
     tagIdsJson: JSON.stringify(tagIds),
   });
-}
-
-export async function startBreak(): Promise<void> {
-  await invoke("start_break");
-}
-
-export async function pauseTimer(): Promise<void> {
-  await invoke("pause_timer");
-}
-
-export async function resumeTimer(): Promise<void> {
-  await invoke("resume_timer");
-}
-
-export async function stopAndResetTimer(): Promise<void> {
-  await invoke("stop_and_reset_timer");
 }
 
 export async function openDashboardWindow(): Promise<void> {
@@ -99,7 +99,7 @@ export async function updateTaskLog(params: {
     tagsJson: JSON.stringify(params.tagIds),
     startTime: params.startTime,
     endTime: params.endTime,
-    durationSeconds: params.durationSeconds,
+    durationSeconds: Math.round(params.durationSeconds || 0),
     editNote: params.editNote,
   });
 }
@@ -124,26 +124,14 @@ export async function onTimerTick(
   });
 }
 
-export async function onTasksChanged(
-  callback: () => void
-): Promise<UnlistenFn> {
-  return await listen("tasks-changed", () => {
-    callback();
-  });
+export async function onTasksChanged(callback: () => void): Promise<UnlistenFn> {
+  return await listen("tasks-changed", () => callback());
 }
 
-export async function onOvertimeStarted(
-  callback: () => void
-): Promise<UnlistenFn> {
-  return await listen("pomodoro-overtime-started", () => {
-    callback();
-  });
+export async function onOvertimeStarted(callback: () => void): Promise<UnlistenFn> {
+  return await listen("pomodoro-overtime-started", () => callback());
 }
 
-export async function onOvertimeNudge(
-  callback: () => void
-): Promise<UnlistenFn> {
-  return await listen("pomodoro-overtime-nudge", () => {
-    callback();
-  });
+export async function onOvertimeNudge(callback: () => void): Promise<UnlistenFn> {
+  return await listen("pomodoro-overtime-nudge", () => callback());
 }
